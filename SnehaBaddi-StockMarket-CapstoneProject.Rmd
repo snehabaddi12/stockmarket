@@ -1,0 +1,1112 @@
+---
+title: "Stock Market Complete Project"
+author: "Sneha Baddi Jituri"
+date: "2024-12-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Stock Market Prediction Analysis
+
+### Defining the Project Scope:
+
+Develop and evaluate machine learning models to predict stock prices and returns for major tech companies using technical indicators, market data, and macroeconomic factors, focusing on both individual stocks and portfolio-level analysis.
+
+### Problem Statement
+
+Stock market prediction is complex due to multiple influencing factors, making it difficult for investors to make informed decisions without comprehensive analysis of technical indicators, market trends, and macroeconomic factors.
+
+### Project Objectives
+
+-   Analyze historical stock data and create predictive models
+-   Evaluate impact of technical and macroeconomic indicators
+-   Develop portfolio-level prediction strategy
+-   Create actionable insights for investment decisions
+
+### Hypothesis
+
+-   H1: Predicting the Close Prices for Stocks
+-   H2: Predicting the Returns for Stocks
+
+### Risks & Limitations
+
+1.  Market volatility and unpredictable events can affect model accuracy
+2.  Past performance may not indicate future results
+3.  Macroeconomic factors can have delayed or unexpected impacts
+
+### Data Sources:
+
+-   Yahoo Finance: Stock price data for AAPL, AMZN, MSFT, NVDA
+-   FRED Database: Macroeconomic indicators (Interest rates, Inflation, GDP)
+-   Market Indices: S&P500 and NASDAQ data
+-   Event Timeline: Major events like COVID-19, Russia-Ukraine War
+
+### Data Preparation
+
+#### Installing and loading all the packages
+
+```{r}
+#install.packages(c("quantmod", "tidyquant", "dplyr", "xts", "corrplot", "tidyr", "randomForest"))
+library(quantmod)
+library(tidyquant)
+library(dplyr)
+library(xts)
+library(ggplot2)
+library(corrplot)
+library(tidyr)
+library(plotly)
+library(caret)  
+library(zoo)
+library(randomForest)
+library(TTR)
+library(xgboost)
+library(gridExtra) 
+```
+
+### Gathering/Fetching the data
+
+#### Extracting Stock data for Apple, Amazon, Microsoft and NVIDIA
+
+```{r}
+# Extract stock data for AAPL, AMZN, MSFT, NVDA
+tickers <- c("AAPL", "AMZN", "MSFT", "NVDA")
+
+# Create an empty list to store stock data
+stocks_data <- list()
+
+# Set date range
+start_date <- "2010-01-01"
+end_date <- Sys.Date()
+
+# Fetch stock data for each ticker and clean missing values
+for (ticker in tickers) {
+    # Extract data
+    stock_data <- getSymbols(ticker, src = "yahoo", from = start_date, to = end_date, auto.assign = FALSE)
+    
+    # Remove missing values using na.omit (complete cases)
+    stock_data <- na.omit(stock_data)
+     
+    # Assign cleaned data back to the list
+    stocks_data[[ticker]] <- stock_data
+}
+
+# Extract daily Close prices
+stock_prices_daily <- merge(
+    Cl(stocks_data[["AAPL"]]),
+    Cl(stocks_data[["AMZN"]]),
+    Cl(stocks_data[["MSFT"]]),
+    Cl(stocks_data[["NVDA"]])
+)
+
+# Rename columns
+colnames(stock_prices_daily) <- c("AAPL_Close", "AMZN_Close", "MSFT_Close", "NVDA_Close")
+
+# Display the head of the cleaned daily data
+head(stock_prices_daily)
+
+```
+
+#### Extracting data for Macroeconomic Indicators (Interest Rates, Inflation and GDP)
+
+```{r}
+# Extract Macroeconomic Indicators
+
+# 1. Interest Rates (10-Year Treasury Constant Maturity Rate)
+interest_rates <- getSymbols("DGS10", src = "FRED", from = start_date, to = end_date, auto.assign = FALSE)
+interest_rates <- na.locf(interest_rates)  # Forward fill
+colnames(interest_rates) <- "Interest_Rates"
+
+# 2.# Inflation (Consumer Price Index for All Urban Consumers)
+inflation <- getSymbols("CPIAUCSL", src = "FRED", from = start_date, to = end_date, auto.assign = FALSE)
+inflation <- na.locf(inflation)  # Forward fill
+colnames(inflation) <- "Inflation"
+
+# 3.# GDP (Real Gross Domestic Product) - Quarterly data, needs filling for daily use
+gdp <- getSymbols("GDPC1", src = "FRED", from = start_date, to = end_date, auto.assign = FALSE)
+gdp <- na.locf(gdp)  # Forward fill
+colnames(gdp) <- "GDP"
+
+```
+
+#### Extracting data for Market Indices S&P500 and NASDAQ
+
+```{r}
+# Extract Industry or Sector Indexes
+# Get S&P 500 Index data
+sp500_data <- getSymbols("^GSPC", src = "yahoo", from = start_date, to = end_date, auto.assign = FALSE)
+sp500_close <- Cl(sp500_data)
+sp500_close <- na.locf(sp500_close)  # Forward fill missing values
+colnames(sp500_close) <- "SP500_Close"
+
+# NASDAQ Composite Index
+nasdaq_data <- getSymbols("^IXIC", src = "yahoo", from = start_date, to = end_date, auto.assign = FALSE)
+nasdaq_close <- Cl(nasdaq_data)
+nasdaq_close <- na.locf(nasdaq_close)  # Forward fill missing values
+colnames(nasdaq_close) <- "NASDAQ_Close"
+```
+
+#### Adding the Geopolitical Major Events
+
+```{r}
+# Define Geopolitical Events and Add Them to the Dataset
+# Dummy variables for geopolitical events, set to 0 by default
+geopolitical_events <- data.frame(Date = index(sp500_close),
+ 
+Arab_Spring = ifelse(index(sp500_close) >= "2010-01-01" & index(sp500_close) <= "2011-12-31", 1, 0),
+ 
+European_Sovereign_Debt_Crisis = ifelse(index(sp500_close) >= "2010-01-01" & index(sp500_close) <= "2012-12-31", 1, 0),
+  
+Taper_Tantrum = ifelse(index(sp500_close) >= "2013-05-22" & index(sp500_close) <= "2013-09-05", 1, 0),
+  
+Brexit = ifelse(index(sp500_close) >= "2016-06-23" & index(sp500_close) <= "2016-06-24", 1, 0),
+
+US_China_Trade_War = ifelse(index(sp500_close) >= "2018-07-06" & index(sp500_close) <= "2020-01-15", 1, 0),
+  
+COVID_19_Pandemic = ifelse(index(sp500_close) >= "2020-03-11" & index(sp500_close) <= "2021-10-31", 1, 0),
+  
+Russia_Ukraine_War = ifelse(index(sp500_close) >= "2022-02-24", 1, 0))
+
+```
+
+#### Converting the data to Time Series to ensure consistency in the Data Set
+
+```{r}
+# Convert all data into xts (time series) objects to ensure consistency in time format
+sp500_close <- xts(sp500_close, order.by = index(sp500_close))
+nasdaq_close <- xts(nasdaq_close, order.by = index(nasdaq_close))
+interest_rates <- xts(interest_rates, order.by = index(interest_rates))
+inflation <- xts(inflation, order.by = index(inflation))
+gdp <- xts(gdp, order.by = index(gdp))
+
+# Ensure the geopolitical events are in xts format with the same index as the stock data
+geopolitical_events_xts <- xts(geopolitical_events[, -1], order.by = geopolitical_events$Date)
+
+```
+
+#### Merging all the data and filling the missing values
+
+```{r}
+# After checking the data, we can attempt merging again
+merged_data_daily <- merge(
+  stock_prices_daily,
+  sp500_close,
+  nasdaq_close,
+  interest_rates,
+  inflation,
+  gdp,
+  geopolitical_events_xts,
+  all = TRUE  # Ensure we keep all rows, even if data is missing in some columns
+)
+
+# Print the date range and number of rows in the merged data
+cat("\nMerged Data Date Range:\n")
+print(range(index(merged_data_daily)))
+
+cat("\nNumber of Rows in Merged Data: ", nrow(merged_data_daily), "\n")
+
+# Fill missing values using Last Observation Carried Forward (locf)
+merged_data_daily <- na.locf(merged_data_daily, fromLast = FALSE)  # Fill forward
+merged_data_daily <- na.locf(merged_data_daily, fromLast = TRUE)   # Fill backward for any leading NAs
+
+# **Debugging Step**: Check if there are any remaining missing values
+cat("\nRemaining Missing Values After locf:\n")
+print(sum(is.na(merged_data_daily)))
+
+# Convert the 'xts' object to a data frame
+merged_data_df <- data.frame(Date = index(merged_data_daily), coredata(merged_data_daily))
+
+# Save the cleaned dataset with the date column to a CSV file
+write.csv(merged_data_df, file = "cleaned_merged_daily_stock_data.csv", row.names = FALSE)
+
+cat("The cleaned dataset with the date column has been saved as 'cleaned_merged_daily_stock_data.csv'.")
+
+summary(merged_data_daily)
+
+```
+
+### Exploratory Data Analysis:
+
+The goal of EDA is to understand the structure, patterns, and key relationships in the data set before diving into modeling.
+
+```{r}
+# 1. Summary Statistics
+cat("\nSummary Statistics:\n")
+summary(merged_data_df)
+
+# 2. Visualizations
+
+# Line Plot: Stock Prices
+ggplot(merged_data_df, aes(x = Date)) +
+  geom_line(aes(y = AAPL_Close, color = "Apple")) +
+  geom_line(aes(y = AMZN_Close, color = "Amazon")) +
+  geom_line(aes(y = MSFT_Close, color = "Microsoft")) +
+  geom_line(aes(y = NVDA_Close, color = "Nvidia")) +
+  labs(title = "Stock Prices Over Time", x = "Date", y = "Close Price") +
+  theme_minimal()
+
+# Line Plot: Market Indices Close Prices
+ggplot(merged_data_df, aes(x = Date)) +
+  geom_line(aes(y = SP500_Close, color = "S&P500")) +
+  geom_line(aes(y = NASDAQ_Close, color = "NASDAQ")) +
+  labs(title = "Index Close Prices Over Time", x = "Date", y = "Close Price") +
+  theme_minimal()
+
+# Line Plot: Macroeconomic data
+# Normalize the data
+merged_data_df$GDP_Norm <- (merged_data_df$GDP - min(merged_data_df$GDP)) / 
+                           (max(merged_data_df$GDP) - min(merged_data_df$GDP))
+merged_data_df$Inflation_Norm <- (merged_data_df$Inflation - min(merged_data_df$Inflation)) / 
+                                  (max(merged_data_df$Inflation) - min(merged_data_df$Inflation))
+merged_data_df$Interest_Rates_Norm <- (merged_data_df$Interest_Rates - min(merged_data_df$Interest_Rates)) / 
+                                       (max(merged_data_df$Interest_Rates) - min(merged_data_df$Interest_Rates))
+
+# Plot normalized data
+ggplot(merged_data_df, aes(x = Date)) +
+  geom_line(aes(y = GDP_Norm, color = "GDP (Normalized)")) +
+  geom_line(aes(y = Inflation_Norm, color = "Inflation (Normalized)")) +
+  geom_line(aes(y = Interest_Rates_Norm, color = "Interest Rates (Normalized)")) +
+  labs(title = "Normalized Macroeconomic Data Over Time", x = "Date", y = "Normalized Value") +
+  scale_color_manual(values = c("red", "blue", "green")) +
+  theme_minimal()
+
+# Histogram: Distribution of Daily Returns for Apple
+merged_data_df <- merged_data_df %>%
+  mutate(AAPL_Returns = (AAPL_Close / lag(AAPL_Close) - 1) * 100)
+
+ggplot(merged_data_df, aes(x = AAPL_Returns)) +
+  geom_histogram(binwidth = 0.5, fill = "blue", alpha = 0.7) +
+  labs(title = "Histogram of Apple Daily Returns", x = "Daily Returns (%)", y = "Frequency") +
+  theme_minimal()
+
+# 3. Enhanced Correlation Matrix
+correlation_matrix <- merged_data_df %>%
+  select(AAPL_Close, AMZN_Close, MSFT_Close, NVDA_Close, SP500_Close, NASDAQ_Close, 
+         Interest_Rates, Inflation, GDP) %>%
+  cor(use = "complete.obs")
+
+corrplot(correlation_matrix, 
+         method = "color", 
+         type = "upper",
+         addCoef.col = "black",
+         number.cex = 0.7,
+         tl.col = "black", 
+         tl.srt = 45,
+         title = "Correlation Matrix: Stocks & Macro Variables",
+         mar = c(0,0,2,0))
+
+# Step 4: Overlay Events on Stock Price Time-Series
+# Reshape data to long format for easier handling of events
+event_columns <- c("Arab_Spring", "European_Sovereign_Debt_Crisis",  
+                    "COVID_19_Pandemic", "Russia_Ukraine_War")
+
+event_data <- merged_data_df %>%
+  select(Date, all_of(event_columns)) %>%
+  pivot_longer(cols = all_of(event_columns), names_to = "Event", values_to = "Occurred") %>%
+  filter(Occurred == 1)  # Only keep rows where the event occurred
+
+# Main plot with events and legend
+ggplot(merged_data_df, aes(x = Date)) +
+  # Plot stock prices
+  geom_line(aes(y = AAPL_Close, color = "AAPL_Close")) +
+  geom_line(aes(y = AMZN_Close, color = "AMZN_Close")) +
+  geom_line(aes(y = MSFT_Close, color = "MSFT_Close")) +
+  geom_line(aes(y = NVDA_Close, color = "NVDA_Close")) +
+  
+  # Add vertical lines for events using event_data
+  geom_vline(data = event_data, aes(xintercept = as.numeric(Date), color = Event), 
+             linetype = "dashed", size = 0.5) +
+  
+  # Add labels and title
+  labs(title = "Stock Prices Over Time with Geopolitical Events",
+       x = "Date", y = "Close Price", color = "Legend") +
+  
+  # Theme customization
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  
+  # Customize stock line colors
+  scale_color_manual(values = c("AAPL_Close" = "blue", "AMZN_Close" = "orange",
+                                "MSFT_Close" = "red", "NVDA_Close" = "black", 
+                                 "Arab_Spring" = "yellow",
+                                 "COVID_19_Pandemic" = "green", 
+                                 "Russia_Ukraine_War" = "purple", 
+                                 "European_Sovereign_Debt_Crisis" = "cyan"
+                                 ))
+```
+
+#### Zoomed-in plot to see the variations in stocks closely
+
+```{r}
+#library(plotly)
+# Define time windows for the events
+covid_period <- as.Date(c("2020-01-01", "2021-12-31"))  # COVID-19 timeframe
+russia_ukraine_period <- as.Date(c("2022-01-01", "2023-12-31"))  # Russia-Ukraine War timeframe
+
+# Filter data for these periods
+zoomed_data <- merged_data_df %>%
+  filter((Date >= covid_period[1] & Date <= covid_period[2]) |
+         (Date >= russia_ukraine_period[1] & Date <= russia_ukraine_period[2]))
+
+# Filter events for only COVID-19 and Russia-Ukraine War
+selected_event_data_zoomed <- zoomed_data %>%
+  select(Date, COVID_19_Pandemic, Russia_Ukraine_War) %>%
+  pivot_longer(cols = c(COVID_19_Pandemic, Russia_Ukraine_War), 
+               names_to = "Event", values_to = "Occurred") %>%
+  filter(Occurred == 1)
+
+# Create the Plotly plot
+plot_zoomed <- plot_ly() %>%
+  # Add stock price lines
+  add_lines(data = zoomed_data, x = ~Date, y = ~AAPL_Close, name = "AAPL Close", 
+            line = list(color = "blue")) %>%
+  add_lines(data = zoomed_data, x = ~Date, y = ~AMZN_Close, name = "AMZN Close", 
+            line = list(color = "orange")) %>%
+  add_lines(data = zoomed_data, x = ~Date, y = ~MSFT_Close, name = "MSFT Close", 
+            line = list(color = "green")) %>%
+  add_lines(data = zoomed_data, x = ~Date, y = ~NVDA_Close, name = "NVDA Close", 
+            line = list(color = "purple")) %>%
+  
+  # Add vertical lines for COVID-19 and Russia-Ukraine War
+  add_segments(data = selected_event_data_zoomed, x = ~Date, xend = ~Date, y = 0, 
+               yend = max(zoomed_data$AAPL_Close, na.rm = TRUE), 
+               name = ~Event, line = list(dash = "dash"), hoverinfo = "text",
+               text = ~paste("Event:", Event)) %>%
+  
+  # Layout and zoomed-in axis limits
+  layout(
+    title = "Zoomed Stock Prices: COVID-19 and Russia-Ukraine War",
+    xaxis = list(title = "Date", range = c(min(zoomed_data$Date), max(zoomed_data$Date))),
+    yaxis = list(title = "Close Price"),
+    legend = list(title = list(text = "Legend")),
+    hovermode = "x unified"
+  )
+
+# Display the plot
+plot_zoomed
+
+```
+
+### Data Preparation for Predictive Modeling
+
+This step ensures that the data is formatted and ready for predictive analysis.Following are steps involved:
+
+-   Feature Engineering: We added useful features like daily returns, moving averages, volatility, and lagged prices to improve the predictive model.
+
+-   Train-Test Split: Splitting ensures we have separate data set for training and testing, reducing the risk of over fitting.
+
+-   Scaling: Min-Max Scaling converts all features to the same scale (between 0 and 1), which is crucial for machine learning models.
+
+#### Features and Model Building for Stocks Close Price
+
+-   Moving Averages: Shows trend direction and strength
+
+-   Volatility: Measures price variability, Shows market uncertainty, Indicates potential risk
+
+```{r}
+# Generalized code Close price of all stocks
+# Calculating the returns for stocks and indexes.
+merged_data_df <- merged_data_df %>%
+  mutate(AAPL_Returns = (AAPL_Close / lag(AAPL_Close) - 1) * 100,
+         AMZN_Returns = (AMZN_Close / lag(AMZN_Close) - 1) * 100,
+         MSFT_Returns = (MSFT_Close / lag(MSFT_Close) - 1) * 100,
+         NVDA_Returns = (NVDA_Close / lag(NVDA_Close) - 1) * 100,
+         SP500_Returns = (SP500_Close / lag(SP500_Close) - 1) * 100,
+         NASDAQ_Returns = (NASDAQ_Close / lag(NASDAQ_Close) - 1) * 100)
+
+# Calculating the Moving averages( 7-day and 30-day) and volatility for Sector Index closing prices
+merged_data_df <- merged_data_df %>%
+  mutate( SP500_MA7 = zoo::rollmean(SP500_Close, 7, fill = NA, align = "right"),
+          SP500_MA30 = zoo::rollmean(SP500_Close, 30, fill = NA, align = "right"),
+          NASDAQ_MA7 = zoo::rollmean(NASDAQ_Close, 7, fill = NA, align = "right"),
+          NASDAQ_MA30 = zoo::rollmean(NASDAQ_Close, 30, fill = NA, align = "right"),
+          SP500_Volatility = zoo::rollapply(SP500_Returns, 7, sd, fill = NA, align = "right"),
+          NASDAQ_Volatility = zoo::rollapply(NASDAQ_Returns, 7, sd, fill = NA, align = "right"))
+
+
+# Function to create Technical indicators (Moving averages( 7 and 30-day), 
+# volatility and Previous/lag values) for any stock
+create_stock_features <- function(data, stock_symbol) {
+    data %>%
+        mutate(
+            # Moving Averages
+            !!paste0(stock_symbol, "_MA7") := zoo::rollmean(get(paste0(stock_symbol, "_Close")), 
+                                                           7, fill = NA, align = "right"),
+            !!paste0(stock_symbol, "_MA30") := zoo::rollmean(get(paste0(stock_symbol, "_Close")), 
+                                                            30, fill = NA, align = "right"),
+            !!paste0(stock_symbol, "_Volatility") := zoo::rollapply(get(paste0(stock_symbol, "_Returns")), 
+                                                                   7, sd, fill = NA, align = "right"),
+            !!paste0(stock_symbol, "_Lag1") := lag(get(paste0(stock_symbol, "_Close")))
+        )
+}
+
+# Function to predict stock price
+predict_stock_price <- function(merged_data_df, stock_symbol) {
+    # Handle missing values first
+    merged_data_df <- na.omit(merged_data_df)
+    
+    # Create features for the specific stock
+    stock_features <- c(paste0(stock_symbol, "_MA7"), 
+                       paste0(stock_symbol, "_MA30"), 
+                       paste0(stock_symbol, "_Volatility"), 
+                       paste0(stock_symbol, "_Lag1"))
+    
+    
+    # Combine with market and macro features
+    predict_features <- c(
+        stock_features,
+        "Interest_Rates", "Inflation", "GDP", "NASDAQ_Close", "SP500_Close",
+        "SP500_MA7", "SP500_MA30", "SP500_Volatility",
+        "NASDAQ_MA7", "NASDAQ_MA30", "NASDAQ_Volatility",
+        "Arab_Spring", "COVID_19_Pandemic", "Russia_Ukraine_War",
+        "European_Sovereign_Debt_Crisis"
+    )
+    
+    # Verify all features exist in the dataset
+    missing_features <- predict_features[!predict_features %in% names(merged_data_df)]
+    if(length(missing_features) > 0) {
+        stop("Missing features: ", paste(missing_features, collapse = ", "))
+    }
+    
+    # Train-Test Split 
+    set.seed(123)
+    target_col <- paste0(stock_symbol, "_Close")
+    train_index <- createDataPartition(merged_data_df[[target_col]], p = 0.8, list = FALSE)
+    train_data <- merged_data_df[train_index, ]
+    test_data <- merged_data_df[-train_index, ]
+    
+    # Scaling
+    scaler <- preProcess(train_data[, -1], method = c("range"))  # Exclude date column
+    train_data_scaled <- predict(scaler, train_data)
+    test_data_scaled <- predict(scaler, test_data)
+    
+    # Filter relevant columns and ensure no missing values
+    train_data_scaled_filtered <- train_data_scaled %>% 
+        select(all_of(predict_features), target = !!target_col) %>%
+        na.omit()
+    
+    test_data_scaled_filtered <- test_data_scaled %>% 
+        select(all_of(predict_features), target = !!target_col) %>%
+        na.omit()
+    
+    # Check if we have enough data after filtering
+    if(nrow(train_data_scaled_filtered) < 10 || nrow(test_data_scaled_filtered) < 10) {
+        stop("Not enough data after removing missing values")
+    }
+    
+    # Build Model
+    model <- randomForest(
+                  target ~ ., 
+                  data = train_data_scaled_filtered, 
+                  ntree = 100, 
+                  na.action = na.omit)
+    
+    # Feature Importance
+    importance_values <- importance(model)
+    cat("\nFeature Importance for", stock_symbol, ":\n")
+    print(importance_values[order(-importance_values[, 1]), ])
+    
+    # Predictions
+    predictions <- predict(model, test_data_scaled_filtered %>% select(-target))
+    actual <- test_data_scaled_filtered$target
+    
+    # Metrics
+    metrics <- list(
+        RMSE = sqrt(mean((predictions - actual)^2)),
+        MAE = mean(abs(predictions - actual)),
+        MAPE = mean(abs((predictions - actual) / actual)) * 100,
+        sMAPE = mean(2 * abs(predictions - actual) / (abs(predictions) + abs(actual))) * 100
+    )
+    
+    # Visualization
+    plots <- list(
+        scatter = ggplot(data = data.frame(Actual = actual, Predicted = predictions), 
+                        aes(x = Actual, y = Predicted)) +
+            geom_point(color = "blue", alpha = 0.6) +
+            geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
+            labs(title = paste(stock_symbol, "Actual vs. Predicted Closing Prices"),
+                 x = "Actual Closing Price", 
+                 y = "Predicted Closing Price") +
+            theme_minimal(),
+        
+        timeseries = ggplot(data = data.frame(
+            Date = test_data$Date,
+            Actual = actual,
+            Predicted = predictions
+        ), aes(x = Date)) +
+            geom_line(aes(y = Actual, color = "Actual"), size = 1) +
+            geom_line(aes(y = Predicted, color = "Predicted"), 
+                     size = 1, linetype = "dashed") +
+            scale_color_manual(values = c("Actual" = "blue", "Predicted" = "orange")) +
+            labs(title = paste(stock_symbol, "Closing Prices: Actual vs Predicted"),
+                 x = "Date", 
+                 y = "Closing Price") +
+            theme_minimal()
+    )
+    
+    return(list(
+        model = model,
+        metrics = metrics,
+        predictions = predictions,
+        actual = actual,
+        plots = plots
+    ))
+}
+
+# Process each stock
+stock_symbols <- c("AAPL", "AMZN", "MSFT", "NVDA")
+results <- list()
+
+for(symbol in stock_symbols) {
+    cat("\nProcessing", symbol, "...\n")
+    tryCatch({
+        # Create features
+        merged_data_df <- create_stock_features(merged_data_df, symbol)
+        
+        # Predict and store results
+        results[[symbol]] <- predict_stock_price(merged_data_df, symbol)
+        
+        # Print metrics
+        cat("\nMetrics for", symbol, ":\n")
+        print(results[[symbol]]$metrics)
+        
+        # Display plots
+        print(results[[symbol]]$plots$scatter)
+        print(results[[symbol]]$plots$timeseries)
+    }, error = function(e) {
+        cat("Error processing", symbol, ":", e$message, "\n")
+    })
+}
+```
+
+#### Performance Prediction for Close Price of Stocks
+
+```{r}
+# 1. Compare Performance Metrics Across Stocks
+compare_performance <- function(results, stock_symbols) {
+    # Combine metrics for all stocks
+    metrics_df <- data.frame(
+        Stock = stock_symbols,
+        RMSE = sapply(results, function(x) x$metrics$RMSE),
+        MAE = sapply(results, function(x) x$metrics$MAE),
+        sMAPE = sapply(results, function(x) x$metrics$sMAPE)
+    )
+    
+    # Create comparison plots
+    metrics_long <- tidyr::pivot_longer(metrics_df, 
+                                      cols = c("RMSE", "MAE", "sMAPE"),
+                                      names_to = "Metric",
+                                      values_to = "Value")
+    
+    comparison_plot <- ggplot(metrics_long, aes(x = Stock, y = Value, fill = Stock)) +
+        geom_bar(stat = "identity") +
+        facet_wrap(~Metric, scales = "free_y") +
+        labs(title = "Performance Metrics Comparison Across Stocks",
+             y = "Value") +
+        theme_minimal() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    
+    return(list(metrics = metrics_df, plot = comparison_plot))
+}
+
+# 2. Analyze Feature Importance Across Stocks
+analyze_feature_importance <- function(results, stock_symbols) {
+    # Extract and combine feature importance for all stocks
+    importance_list <- lapply(stock_symbols, function(symbol) {
+        imp <- as.data.frame(importance(results[[symbol]]$model))
+        imp$Feature <- rownames(imp)
+        imp$Stock <- symbol
+        return(imp)
+    })
+    
+    importance_df <- do.call(rbind, importance_list)
+    
+    # Create heatmap of feature importance
+    importance_plot <- ggplot(importance_df, 
+                            aes(x = Stock, y = Feature, fill = IncNodePurity)) +
+        geom_tile() +
+        scale_fill_gradient(low = "white", high = "steelblue") +
+        labs(title = "Feature Importance Heatmap Across Stocks",
+             fill = "Importance") +
+        theme_minimal() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    
+    return(list(importance = importance_df, plot = importance_plot))
+}
+
+# 3. Create Portfolio Analysis of stocks
+create_portfolio_predictions <- function(results, stock_symbols, test_data) {
+    # First get minimum length across all results to ensure consistency
+    min_rows <- min(sapply(results, function(x) length(x$actual)))
+    
+    # Create initial dataframe with the minimum number of rows
+    portfolio_df <- data.frame(
+        Date = tail(test_data$Date, min_rows),
+        Portfolio_Actual = 0,
+        Portfolio_Predicted = 0
+    )
+    
+    # Calculate equal weights
+    weights <- rep(1/length(stock_symbols), length(stock_symbols))
+    names(weights) <- stock_symbols
+    
+    # Add each stock's contribution to portfolio
+    for(symbol in stock_symbols) {
+        # Take only the last min_rows from each result
+        actual_values <- tail(results[[symbol]]$actual, min_rows)
+        predicted_values <- tail(results[[symbol]]$predictions, min_rows)
+        
+        # Add individual stock data
+        portfolio_df[[paste0(symbol, "_Actual")]] <- actual_values
+        portfolio_df[[paste0(symbol, "_Predicted")]] <- predicted_values
+        
+        # Add weighted contribution to portfolio
+        portfolio_df$Portfolio_Actual <- portfolio_df$Portfolio_Actual + 
+            actual_values * weights[symbol]
+        portfolio_df$Portfolio_Predicted <- portfolio_df$Portfolio_Predicted + 
+            predicted_values * weights[symbol]
+    }
+ 
+    # Calculate portfolio metrics
+    portfolio_metrics <- list(
+        RMSE = sqrt(mean((portfolio_df$Portfolio_Predicted - portfolio_df$Portfolio_Actual)^2)),
+        MAE = mean(abs(portfolio_df$Portfolio_Predicted - portfolio_df$Portfolio_Actual)),
+        sMAPE = mean(2 * abs(portfolio_df$Portfolio_Predicted - portfolio_df$Portfolio_Actual) / 
+                    (abs(portfolio_df$Portfolio_Predicted) + abs(portfolio_df$Portfolio_Actual))) * 100
+    )
+    
+   
+    portfolio_plot <- ggplot(portfolio_df, aes(x = Date)) +
+        geom_line(aes(y = Portfolio_Actual, color = "Actual"), size = 1) +
+        geom_line(aes(y = Portfolio_Predicted, color = "Predicted"), 
+                 size = 1, linetype = "dashed") +
+        labs(title = "Portfolio Performance: Actual vs Predicted",
+             x = "Date", y = "Portfolio Value",
+             color = "Type") +
+        scale_color_manual(values = c("Actual" = "blue", "Predicted" = "red")) +
+        theme_minimal() +
+        theme(legend.position = "bottom")
+    
+    # Create individual stock performance plots
+    stock_plots <- list()
+    for(symbol in stock_symbols) {
+        stock_plots[[symbol]] <- ggplot(portfolio_df, aes(x = Date)) +
+            geom_line(aes_string(y = paste0(symbol, "_Actual"), color = "'Actual'")) +
+            geom_line(aes_string(y = paste0(symbol, "_Predicted"), color = "'Predicted'")) +
+            labs(title = paste(symbol, "Performance"),
+                 x = "Date", y = "Value") +
+            scale_color_manual(values = c("Actual" = "blue", "Predicted" = "red")) +
+            theme_minimal() +
+            theme(legend.position = "bottom")
+    }
+    
+    return(list(
+        portfolio_data = portfolio_df,
+        metrics = portfolio_metrics,
+        portfolio_plot = portfolio_plot,
+        stock_plots = stock_plots,
+        weights = weights
+    ))
+}
+
+# Get test_data from one of the stock predictions
+first_symbol <- stock_symbols[1]
+test_data_length <- length(results[[first_symbol]]$actual)
+# Run analyses
+performance_comparison <- compare_performance(results, stock_symbols)
+feature_analysis <- analyze_feature_importance(results, stock_symbols)
+
+# Create date sequence for portfolio analysis
+date_sequence <- tail(merged_data_df$Date, test_data_length)
+test_data <- data.frame(Date = date_sequence)
+
+portfolio_results <- create_portfolio_predictions(results, stock_symbols, test_data)
+
+# Display results
+cat("\nPerformance Comparison Across Stocks:\n")
+print(performance_comparison$metrics)
+print(performance_comparison$plot)
+
+cat("\nFeature Importance Analysis:\n")
+print(feature_analysis$importance)
+print(feature_analysis$plot)
+
+cat("\nPortfolio Analysis:\n")
+print(portfolio_results$metrics)
+print(portfolio_results$portfolio_plot)
+
+# Display individual stock plots
+for(symbol in stock_symbols) {
+    print(portfolio_results$stock_plots[[symbol]])
+}
+
+# Print portfolio weights
+cat("\nPortfolio Weights:\n")
+print(portfolio_results$weights)
+```
+
+### Feature and Model Building for Stocks Returns
+
+We are calculating various indicators to predict returns. Here are some:
+
+-   Price Momentum: Help to understand the price movements like short-term, medium and long-term.
+
+-   RSI (Relative Strength Index): Measures momentum by comparing the magnitude of recent gains to recent losses, Shows if a stock is overbought or oversold
+
+-   RSMA(Relative Moving Average): Smooths out RSI fluctuations, Reduces impact of outliers, More reliable trend identification
+
+-   MACD (Moving Average Convergence Divergence):Shows relationship between two moving averages
+
+```{r}
+# Function to create features for any stock
+create_stock_features <- function(data, symbol) {
+    data %>%
+        mutate(
+            # Price Momentum
+            !!paste0(symbol, "_Return_1D") := (get(paste0(symbol, "_Close"))/lag(get(paste0(symbol, "_Close")), 1) - 1) * 100,
+            !!paste0(symbol, "_Return_3D") := (get(paste0(symbol, "_Close"))/lag(get(paste0(symbol, "_Close")), 3) - 1) * 100,
+            !!paste0(symbol, "_Return_5D") := (get(paste0(symbol, "_Close"))/lag(get(paste0(symbol, "_Close")), 5) - 1) * 100,
+            !!paste0(symbol, "_Return_10D") := (get(paste0(symbol, "_Close"))/lag(get(paste0(symbol, "_Close")), 10) - 1) * 100,
+            !!paste0(symbol, "_Return_20D") := (get(paste0(symbol, "_Close"))/lag(get(paste0(symbol, "_Close")), 20) - 1) * 100,
+            
+            # Technical Indicators
+            !!paste0(symbol, "_RSI") := RSI(get(paste0(symbol, "_Close")), n = 14),
+            !!paste0(symbol, "_RSI_MA") := SMA(RSI(get(paste0(symbol, "_Close")), n = 14), n = 3),
+            !!paste0(symbol, "_MACD") := MACD(get(paste0(symbol, "_Close")))[, "macd"],
+            !!paste0(symbol, "_Signal") := MACD(get(paste0(symbol, "_Close")))[, "signal"],
+            !!paste0(symbol, "_MACD_Hist") := MACD(get(paste0(symbol, "_Close")))[, "macd"] - 
+                                             MACD(get(paste0(symbol, "_Close")))[, "signal"],
+            
+            # Moving Averages
+            !!paste0(symbol, "_MA7") := rollmean(get(paste0(symbol, "_Close")), 7, fill = NA, align = "right"),
+            !!paste0(symbol, "_MA20") := rollmean(get(paste0(symbol, "_Close")), 20, fill = NA, align = "right"),
+            !!paste0(symbol, "_MA30") := rollmean(get(paste0(symbol, "_Close")), 30, fill = NA, align = "right"),
+            
+            # Volatility Measures
+            !!paste0(symbol, "_Vol_5D") := rollapply(get(paste0(symbol, "_Returns")), 5, sd, fill = NA, align = "right"),
+            !!paste0(symbol, "_Vol_10D") := rollapply(get(paste0(symbol, "_Returns")), 10, sd, fill = NA, align = "right"),
+            !!paste0(symbol, "_Vol_22D") := rollapply(get(paste0(symbol, "_Returns")), 22, sd, fill = NA, align = "right"),
+            
+            # Relative Performance (Shows if stock moves with or against market,Identifies sector-specific  vs market-wide movements)
+            !!paste0(symbol, "_vs_SP500") := get(paste0(symbol, "_Returns")) - SP500_Returns,
+            !!paste0(symbol, "_vs_NASDAQ") := get(paste0(symbol, "_Returns")) - NASDAQ_Returns,
+            !!paste0(symbol, "_Relative_Strength") := (get(paste0(symbol, "_Close"))/lag(get(paste0(symbol, "_Close")), 20)) / 
+                                                     (SP500_Close/lag(SP500_Close, 20))
+        )
+}
+
+# Function to create features list for a stock
+get_stock_features <- function(symbol) {
+    c(
+        paste0(symbol, "_Returns_Lag", 1:10),
+        paste0(symbol, "_Return_", c("1D", "3D", "5D", "10D", "20D")),
+        paste0(symbol, "_", c("RSI", "RSI_MA", "MACD", "Signal", "MACD_Hist")),
+        paste0(symbol, "_MA", c(7, 20, 30)),
+        paste0(symbol, "_Vol_", c("5D", "10D", "22D")),
+        paste0(symbol, "_vs_", c("SP500", "NASDAQ")),
+        paste0(symbol, "_Relative_Strength")
+    )
+}
+
+# Function to predict stock returns
+predict_stock_returns <- function(data, symbol) {
+    # Create lagged returns
+    for(i in 1:10) {
+        data[[paste0(symbol, "_Returns_Lag", i)]] <- lag(data[[paste0(symbol, "_Returns")]], i)
+    }
+    
+    # Get features for this stock
+    stock_features <- c(
+        get_stock_features(symbol),
+        "SP500_Returns", "NASDAQ_Returns", "Market_Vol",
+        paste0("SP500_Returns_Lag", 1:10),
+        paste0("NASDAQ_Returns_Lag", 1:10),
+        "Arab_Spring", "COVID_19_Pandemic", "Russia_Ukraine_War",
+        "European_Sovereign_Debt_Crisis"
+    )
+    
+    # Split data
+    set.seed(123)
+    train_index <- createDataPartition(data[[paste0(symbol, "_Returns")]], p = 0.8, list = FALSE)
+    train_data <- data[train_index, ]
+    test_data <- data[-train_index, ]
+    
+    # Scale features
+    scaler <- preProcess(train_data[, stock_features], method = c("center", "scale"))
+    train_scaled <- predict(scaler, train_data)
+    test_scaled <- predict(scaler, test_data)
+    
+    # Prepare matrices
+    train_matrix <- as.matrix(train_scaled[, stock_features])
+    test_matrix <- as.matrix(test_scaled[, stock_features])
+    
+    # Train model
+    xgb_params <- list(
+        objective = "reg:squarederror",
+        max_depth = 6,
+        eta = 0.03,
+        subsample = 0.8,
+        colsample_bytree = 0.8,
+        min_child_weight = 3,
+        gamma = 0.1
+    )
+    
+    model <- xgboost(
+        data = train_matrix,
+        label = train_scaled[[paste0(symbol, "_Returns")]],
+        params = xgb_params,
+        nrounds = 1000,
+        early_stopping_rounds = 50,
+        eval_metric = "rmse",
+        verbose = 0
+    )
+    
+    # Make predictions
+    predictions <- predict(model, test_matrix)
+    
+    # Calculate metrics
+    # R2: Measures how well predictions match actual returns
+    # Direction Accuracy: Measures how often model predicts correct price movement direction
+    metrics <- list(
+        RMSE = sqrt(mean((predictions - test_scaled[[paste0(symbol, "_Returns")]])^2)),
+        MAE = mean(abs(predictions - test_scaled[[paste0(symbol, "_Returns")]])),
+        R2 = cor(predictions, test_scaled[[paste0(symbol, "_Returns")]])^2,
+        Direction_Accuracy = mean(sign(predictions) == sign(test_scaled[[paste0(symbol, "_Returns")]]))
+    )
+    
+    # Create plot
+    plot_data <- data.frame(
+        Date = test_data$Date,
+        Actual = test_scaled[[paste0(symbol, "_Returns")]],
+        Predicted = predictions
+    )
+    
+    plot <- ggplot(plot_data, aes(x = Date)) +
+        geom_line(aes(y = Actual, color = "Actual Returns")) +
+        geom_line(aes(y = Predicted, color = "Predicted Returns")) +
+        labs(title = paste(symbol, "Daily Returns: Actual vs Predicted"),
+             subtitle = paste("Direction Accuracy:", 
+                            round(metrics$Direction_Accuracy * 100, 2), "%"),
+             x = "Date", 
+             y = "Returns (%)",
+             color = "Type") +
+        scale_color_manual(values = c("Actual Returns" = "blue", 
+                                     "Predicted Returns" = "red")) +
+        theme_minimal() +
+        theme(legend.position = "bottom")
+    
+    return(list(
+        model = model,
+        metrics = metrics,
+        predictions = predictions,
+        actual = test_scaled[[paste0(symbol, "_Returns")]],
+        plot = plot,
+        importance = xgb.importance(feature_names = stock_features, model = model)
+    ))
+}
+
+# Process all stocks
+stock_symbols <- c("AAPL", "AMZN", "MSFT", "NVDA")
+results <- list()
+
+# Create market features first
+merged_data_df <- merged_data_df %>%
+    mutate(
+       # SP500_Returns = (SP500_Close/lag(SP500_Close) - 1) * 100,
+        # Nasdaq_Returns = (NASDAQ_Close/lag(NASDAQ_Close) - 1) * 100,
+        Market_Vol = rollapply(SP500_Returns, 10, sd, fill = NA, align = "right")
+    )
+
+# Create market lags
+for(i in 1:10) {
+    merged_data_df[[paste0("SP500_Returns_Lag", i)]] <- lag(merged_data_df$SP500_Returns, i)
+    merged_data_df[[paste0("NASDAQ_Returns_Lag", i)]] <- lag(merged_data_df$NASDAQ_Returns, i)
+}
+
+#names(merged_data_df)
+
+# Process each stock
+for(symbol in stock_symbols) {
+    cat("\nProcessing", symbol, "...\n")
+    
+    # Create features
+    merged_data_df <- create_stock_features(merged_data_df, symbol)
+    
+    # Remove NAs
+    merged_data_df <- na.omit(merged_data_df)
+    
+    # Predict returns
+    results[[symbol]] <- predict_stock_returns(merged_data_df, symbol)
+    
+    # Print metrics
+    cat("\nMetrics for", symbol, ":\n")
+    print(results[[symbol]]$metrics)
+    
+    # Display plot
+    print(results[[symbol]]$plot)
+}
+
+# Compare performance across stocks
+performance_df <- data.frame(
+    Stock = stock_symbols,
+    Direction_Accuracy = sapply(results, function(x) x$metrics$Direction_Accuracy),
+    RMSE = sapply(results, function(x) x$metrics$RMSE),
+    R2 = sapply(results, function(x) x$metrics$R2)
+)
+
+print("\nPerformance Comparison:")
+print(performance_df)
+
+```
+
+#### Performance Prediction for Stocks Returns
+
+```{r}
+# Functions for analyzing returns predictions
+# 1. Compare Performance Metrics Across Stocks
+compare_returns_performance <- function(results, stock_symbols) {
+    # Combine metrics for all stocks
+    metrics_df <- data.frame(
+        Stock = stock_symbols,
+        Direction_Accuracy = sapply(results, function(x) x$metrics$Direction_Accuracy * 100),
+        RMSE = sapply(results, function(x) x$metrics$RMSE),
+        R2 = sapply(results, function(x) x$metrics$R2)
+    )
+    
+    # Create comparison plots
+    metrics_long <- tidyr::pivot_longer(metrics_df, 
+                                      cols = c("Direction_Accuracy", "RMSE", "R2"),
+                                      names_to = "Metric",
+                                      values_to = "Value")
+    
+    comparison_plot <- ggplot(metrics_long, aes(x = Stock, y = Value, fill = Stock)) +
+        geom_bar(stat = "identity") +
+        facet_wrap(~Metric, scales = "free_y") +
+        labs(title = "Returns Prediction Performance Across Stocks",
+             y = "Value") +
+        theme_minimal() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    
+    return(list(metrics = metrics_df, plot = comparison_plot))
+}
+
+# 2. Feature Importance Analysis
+analyze_returns_importance <- function(results, stock_symbols) {
+    # Extract and combine feature importance as before
+    importance_list <- lapply(stock_symbols, function(symbol) {
+        imp <- as.data.frame(results[[symbol]]$importance)
+        imp$Stock <- symbol
+        return(imp)
+    })
+    
+    importance_df <- do.call(rbind, importance_list)
+    
+    # Get top features
+    top_features <- importance_df %>%
+        group_by(Feature) %>%
+        summarise(avg_importance = mean(Gain)) %>%
+        top_n(15, avg_importance) %>%
+        pull(Feature)
+    
+    importance_df_filtered <- importance_df %>%
+        filter(Feature %in% top_features)
+    
+    # Create improved heatmap
+    importance_plot <- ggplot(importance_df_filtered, 
+                            aes(x = Stock, y = reorder(Feature, Gain))) +
+        geom_tile(aes(fill = Gain)) +
+        scale_fill_gradient(low = "white", high = "steelblue") +
+        labs(title = "Top Features Importance Heatmap",
+             y = "Feature",
+             x = "Stock",
+             fill = "Importance") +
+        theme_minimal() +
+        theme(
+            axis.text.x = element_text(angle = 45, hjust = 1),
+            axis.text.y = element_text(size = 8),  # Adjust text size
+            panel.grid.major = element_blank(),    # Remove grid lines
+            panel.grid.minor = element_blank(),
+            axis.text = element_text(color = "black"), # Make text darker
+            plot.margin = unit(c(1, 1, 1, 2), "cm")   # Fixed margin syntax
+        )
+    
+    return(list(importance = importance_df_filtered, plot = importance_plot))
+}
+# 3. Portfolio Returns Analysis
+analyze_portfolio_returns <- function(results, stock_symbols) {
+    # Get the shortest length among all results to ensure consistency
+    min_length <- min(sapply(results, function(x) length(x$actual)))
+    
+    # Create portfolio returns dataframe
+    portfolio_df <- data.frame(
+        Portfolio_Actual = rep(0, min_length),
+        Portfolio_Predicted = rep(0, min_length)
+    )
+    
+    # Equal weights
+    weights <- rep(1/length(stock_symbols), length(stock_symbols))
+    names(weights) <- stock_symbols
+    
+    # Combine returns
+    for(symbol in stock_symbols) {
+        # Take only the minimum length of data
+        portfolio_df[[paste0(symbol, "_Actual")]] <- results[[symbol]]$actual[1:min_length]
+        portfolio_df[[paste0(symbol, "_Predicted")]] <- results[[symbol]]$predictions[1:min_length]
+        
+        portfolio_df$Portfolio_Actual <- portfolio_df$Portfolio_Actual + 
+            results[[symbol]]$actual[1:min_length] * weights[symbol]
+        portfolio_df$Portfolio_Predicted <- portfolio_df$Portfolio_Predicted + 
+            results[[symbol]]$predictions[1:min_length] * weights[symbol]
+    }
+    
+    # Add dates (take from first stock's data)
+    portfolio_df$Date <- tail(merged_data_df$Date, min_length)
+    
+    # Calculate metrics
+    metrics <- list(
+        RMSE = sqrt(mean((portfolio_df$Portfolio_Predicted - portfolio_df$Portfolio_Actual)^2)),
+        Direction_Accuracy = mean(sign(portfolio_df$Portfolio_Predicted) == 
+                                sign(portfolio_df$Portfolio_Actual)) * 100,
+        R2 = cor(portfolio_df$Portfolio_Predicted, portfolio_df$Portfolio_Actual)^2
+    )
+    
+    # Create portfolio plot
+    portfolio_plot <- ggplot(portfolio_df, aes(x = Date)) +
+        geom_line(aes(y = Portfolio_Actual, color = "Actual Returns")) +
+        geom_line(aes(y = Portfolio_Predicted, color = "Predicted Returns")) +
+        labs(title = "Portfolio Returns: Actual vs Predicted",
+             subtitle = paste("Direction Accuracy:", 
+                            round(metrics$Direction_Accuracy, 2), "%"),
+             x = "Date", 
+             y = "Returns (%)",
+             color = "Type") +
+        scale_color_manual(values = c("Actual Returns" = "blue", 
+                                    "Predicted Returns" = "red")) +
+        theme_minimal()
+    
+    return(list(
+        data = portfolio_df,
+        metrics = metrics,
+        plot = portfolio_plot
+    ))
+}
+
+# Update the analysis call
+returns_performance <- compare_returns_performance(results, stock_symbols)
+returns_importance <- analyze_returns_importance(results, stock_symbols)
+returns_portfolio <- analyze_portfolio_returns(results, stock_symbols)  # Removed test_data parameter
+
+# Display results
+cat("\nReturns Performance Comparison Across Stocks:\n")
+print(returns_performance$metrics)
+print(returns_performance$plot)
+
+cat("\nReturns Feature Importance Analysis:\n")
+print(returns_importance$plot)
+
+cat("\nPortfolio Returns Analysis:\n")
+print(returns_portfolio$metrics)
+print(returns_portfolio$plot)
+```
